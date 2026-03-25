@@ -553,6 +553,430 @@ String uuid = java.util.UUID.randomUUID().toString();
     * 只要业务的主体是连续自增的 ID（如用户 ID 1 到 1000 万），且要求 100% 准确的布尔状态记录，首选 Bitmap，极其节省内存。
     * **典型实战：** 记录千万级用户的全年签到打卡状态；精确统计大盘的日活跃用户数 (DAU)。
 
+
+
+没问题！怪我刚才没一次性拼完整，让你复制起来麻烦了。
+
+咱们直接一步到位，把**十三（并发基础与锁 + 实战代码）**、**十四（CAS与AQS + ABA代码）**、**十五（并发容器与线程池）**全部融合成一个最完整、最硬核的 JUC 终极大满贯版本。
+
+请直接一键复制下面这块完整内容，拼接到你的《终极笔记》大结局处：
+
+***
+
+## 十三、 JUC 并发战役一：基础与锁的抉择
+并发编程是区分初级和中高级开发的分水岭，核心在于理清线程状态与锁的机制。
+
+### 1. 进程与线程的物理隔离
+* **进程（工厂）：** 系统分配资源的基本单位。进程崩溃互不影响。
+* **线程（工人）：** CPU 执行的基本单位。线程共享进程的堆内存，但拥有私有的虚拟机栈。一个线程抛出致命异常（如 OOM），可能导致整个进程崩溃。
+
+### 2. Runnable 与 Callable 的核心差异 (附实战代码)
+* **Runnable（跑腿小弟）：** 接口方法为 `void run()`。**无返回值**，且**无法向外抛出受检异常**（只能在内部 try-catch）。
+* **Callable（商务代表）：** 接口方法为 `V call()`。**有返回值**（需配合 `FutureTask` 或线程池获取），且**允许向外抛出异常**供调用者处理。
+
+```java
+import java.util.concurrent.*;
+
+public class ThreadDemo {
+    public static void main(String[] args) throws ExecutionException, InterruptedException {
+        // 规范：创建一个线程池（公司部门）
+        ExecutorService threadPool = Executors.newFixedThreadPool(2);
+
+        // ==========================================
+        // 1. 派【跑腿小弟】Runnable 去干活
+        // 特点：没有返回值，遇到异常只能自己咽下去
+        // ==========================================
+        Runnable errandBoy = () -> {
+            try {
+                System.out.println("跑腿小弟：我只管去送文件，不带回结果...");
+                Thread.sleep(1000); // 模拟干活
+            } catch (InterruptedException e) {
+                e.printStackTrace(); 
+            }
+        };
+        threadPool.submit(errandBoy); 
+
+        // ==========================================
+        // 2. 派【商务代表】Callable 去谈合同
+        // 特点：有返回值！而且允许向上抛出异常！
+        // ==========================================
+        Callable<String> businessRep = () -> {
+            System.out.println("商务代表：我去谈千万合同了...");
+            Thread.sleep(2000); // 模拟谈判
+            return "【千万级合同书】"; 
+        };
+
+        Future<String> futureResult = threadPool.submit(businessRep);
+        System.out.println("老板：代表去谈合同了，我先喝口茶...");
+        
+        // 老板调用 get() 去拿结果。注意：如果代表没回来，这里会【阻塞死等】！
+        String contract = futureResult.get(); 
+        System.out.println("老板拿到结果：" + contract);
+
+        threadPool.shutdown(); // 下班关门
+    }
+}
+```
+
+### 3. Java 锁的对决：synchronized vs ReentrantLock
+* **出生维度：** `synchronized` 是 JVM 层面的关键字（全自动）；`ReentrantLock` 是 API 层面的类（纯手动）。
+* **公平性与唤醒：** `synchronized` 只能非公平，只能盲目唤醒。`ReentrantLock` 可公平可非公平，支持绑定多个 `Condition` 精准唤醒。
+* **🚨 释放机制铁律：** `synchronized` 自动释放；**`ReentrantLock` 必须在 `finally` 块中纯手动调用 `unlock()`**。
+
+```java
+import java.util.concurrent.locks.ReentrantLock;
+
+public class LockDemo {
+    // 共享的账户余额
+    private int balance = 1000;
+    
+    // 声明一把纯手动锁（默认是非公平锁，传 true 变成公平锁）
+    private final ReentrantLock manualLock = new ReentrantLock();
+
+    // ==========================================
+    // 方式一：使用 synchronized (全自动挡)
+    // ==========================================
+    public synchronized void syncWithdraw(int amount) {
+        if (balance >= amount) {
+            balance -= amount;
+            System.out.println("全自动取钱成功，余额：" + balance);
+        }
+        // 方法结束，或者抛出异常时，系统【自动释放锁】，绝对不会死锁
+    }
+
+    // ==========================================
+    // 方式二：使用 ReentrantLock (纯手动挡)
+    // ==========================================
+    public void reentrantWithdraw(int amount) {
+        // 1. 纯手动上锁 (如果锁被别人拿了，我会在这里排队阻塞)
+        manualLock.lock(); 
+        try {
+            // 2. 核心业务逻辑
+            if (balance >= amount) {
+                balance -= amount;
+                System.out.println("纯手动取钱成功，余额：" + balance);
+            }
+        } finally {
+            // 3. 🚨 铁律中的铁律：必须在 finally 中纯手动解锁！
+            // 否则万一报错跳过了解锁，这把锁永远不释放，其他排队线程全部饿死！
+            manualLock.unlock(); 
+        }
+    }
+}
+```
+
+### 4. 高频手撕代码：死锁案发现场
+死锁的核心原因在于：多个线程互相持有对方需要的资源，并互相等待，形成死循环。（线上排查通常使用 `jstack` 命令查看线程快照）。
+
+```java
+public class DeadLockDemo {
+    // 两个共享资源（宝箱的钥匙和密码本）
+    private static final Object key = new Object();
+    private static final Object codebook = new Object();
+
+    public static void main(String[] args) {
+        // 线程A：先拿钥匙，再抢密码本
+        Thread threadA = new Thread(() -> {
+            synchronized (key) {
+                System.out.println("玩家A：我拿到了【钥匙】，准备去抢密码本...");
+                try { Thread.sleep(100); } catch (InterruptedException e) {} 
+                
+                synchronized (codebook) {
+                    System.out.println("玩家A：拿到了密码本，成功开箱！");
+                }
+            }
+        });
+
+        // 线程B：先拿密码本，再抢钥匙
+        Thread threadB = new Thread(() -> {
+            synchronized (codebook) {
+                System.out.println("玩家B：我拿到了【密码本】，准备去抢钥匙...");
+                try { Thread.sleep(100); } catch (InterruptedException e) {} 
+                
+                synchronized (key) {
+                    System.out.println("玩家B：拿到了钥匙，成功开箱！");
+                }
+            }
+        });
+
+        threadA.start();
+        threadB.start();
+        // 运行结果：互相死等，程序永远不会结束！
+    }
+}
+```
+
+---
+
+## 十四、 JUC 并发战役二：底层神明 CAS 与 AQS
+
+### 1. CAS (Compare And Swap) 原理与 ABA 漏洞
+* **原理：** 一种无锁的乐观锁机制。修改数据时，对比当前内存值与预期的旧值，若一致才进行修改更新；若不一致则自旋重试。极大地提升了并发性能。
+* **🔥 ABA 漏洞案发：** 线程 1 准备修改 A 为 B，期间线程 2 将 A 改为 C 又火速改回 A。线程 1 醒来比较发现还是 A，误以为无人修改，执行成功，导致严重的安全隐患。
+* **终极解法（附实战代码）：使用 `AtomicStampedReference` 增加版本号。** 每次修改不仅改变值，还将版本号 + 1。CAS 时双重对比（值 + 版本号），完美拦截狸猫换太子。
+
+```java
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicStampedReference;
+
+public class ABADemo {
+    public static void main(String[] args) {
+        // ==========================================
+        // 1. 灾难现场：普通的 AtomicInteger 引发 ABA 问题
+        // ==========================================
+        AtomicInteger balance = new AtomicInteger(100);
+
+        new Thread(() -> {
+            // 狸猫换太子：100 -> 150 -> 100
+            balance.compareAndSet(100, 150);
+            balance.compareAndSet(150, 100);
+        }, "小偷线程").start();
+
+        new Thread(() -> {
+            try { Thread.sleep(500); } catch (InterruptedException e) {} 
+            // 傻乎乎的 CAS，看到还是 100 就以为没事，执行成功！
+            boolean success = balance.compareAndSet(100, 50);
+            System.out.println("普通CAS扣款结果：" + success + "，当前余额：" + balance.get()); // 输出 true, 50
+        }, "提现线程").start();
+
+
+        // ==========================================
+        // 2. 满分解法：AtomicStampedReference 彻底解决
+        // ==========================================
+        // 初始值是 100，初始版本号是 1
+        AtomicStampedReference<Integer> safeBalance = new AtomicStampedReference<>(100, 1);
+
+        new Thread(() -> {
+            try { Thread.sleep(100); } catch (InterruptedException e) {}
+            // 修改值，同时版本号 + 1
+            safeBalance.compareAndSet(100, 150, safeBalance.getStamp(), safeBalance.getStamp() + 1);
+            safeBalance.compareAndSet(150, 100, safeBalance.getStamp(), safeBalance.getStamp() + 1);
+        }, "安全的小偷线程").start();
+
+        new Thread(() -> {
+            int stamp = safeBalance.getStamp(); // 一开始拿到的版本号是 1
+            try { Thread.sleep(1000); } catch (InterruptedException e) {} 
+            // 此时真正内存里的版本号已经是 3 了！拿着过期的版本号 1 去尝试修改，直接被拒绝！
+            boolean success = safeBalance.compareAndSet(100, 50, stamp, stamp + 1);
+            System.out.println("加版本号CAS扣款结果：" + success + "，当前版本号：" + safeBalance.getStamp()); // 输出 false
+        }, "安全的提现线程").start();
+    }
+}
+```
+
+### 2. AQS (AbstractQueuedSynchronizer) 核心机制
+AQS 是 Java 并发包（如 `ReentrantLock`, `CountDownLatch`）的底层发电机。
+* **核心结构：** 它维护了一个 `volatile int state` 变量（代表资源状态，如 0 为空闲，1 为被占用），以及一个 **FIFO 双向链表等待队列**。
+* **工作机制：** 线程抢锁时，底层利用 CAS 尝试将 state 从 0 改为 1。抢到则执行业务；抢不到则被 AQS 打包成 Node 节点扔进双向链表休眠排队，等待前驱节点释放资源后被唤醒。
+
+---
+
+## 十五、 JUC 并发战役三：容器安全与线程池实战
+
+### 1. ConcurrentHashMap 的神级锁优化 (JDK 8)
+* **抛弃老旧分段锁：** JDK 7 使用 Segment 分段锁（锁粒度太大）。
+* **JDK 8 极致细化：采用 `Node 数组 + CAS + synchronized`。**
+    * **put 逻辑核心：** 如果计算出的数组桶位置为空，直接使用极其轻量级的 **CAS** 无锁插入头节点。
+    * **局部加锁：** 只有当发生哈希冲突，目标桶不为空时，才会请出 **`synchronized` 仅仅锁住该桶的第一个元素（头节点）**。
+* **优势：** 锁粒度细化到了极致，只要多个线程不向同一个桶里塞数据，大家就可以完全并行操作，并发度等于数组长度。
+
+### 2. 线程池规范与阻塞队列
+* **为什么强制使用线程池：** 避免频繁创建和销毁线程带来的巨大 CPU 开销；实现线程复用，统一管控最大并发量，防止资源耗尽。
+* **阻塞队列的魔法：** 线程池通过内部的**阻塞队列（BlockingQueue）**存放任务。与非阻塞队列不同，当阻塞队列中没有任务时，它会自动让核心工作线程**陷入休眠（挂起）**，释放 CPU 资源；一旦新任务入队，立刻自动唤醒线程干活，实现了优雅的资源调度。
+
+***
+
+哎呀，真是打脸！刚才光顾着给你讲底层逻辑，又把“无代码不八股”的铁律给抛到脑后了。你提醒得太对了，**“只要讲底层和避坑，必须附带源码或实战代码验证”**，这条规则我已经死死刻进我的底层指令里了，以后绝对标配！
+
+咱们这就把 HashSet 的“甩手掌柜”源码、HashMap 的“VIP包厢”源码，以及用自定义对象（比如你项目里的**毛肉外卖订单**）当 Key 导致数据丢失的**灾难现场代码**，统统整合进去。
+
+请直接复制这一版（完美包含源码和避坑实战），替换掉刚才的第十七部分：
+
+***
+
+## 十七、 Java 集合框架陷阱篇：Set 去重与 HashMap 进阶
+
+### 1. HashSet 是怎么保证元素不重复的？(附底层源码验证)
+很多初学者误以为 HashSet 有自己独立的查重算法，其实它在底层是一个彻头彻尾的**“甩手掌柜”**，纯靠白嫖 HashMap。
+
+**🔥 底层源码直击：**
+```java
+// HashSet 的底层其实只维护了一个 HashMap
+private transient HashMap<E,Object> map;
+// 所有的 Value 都用这个叫 PRESENT 的空枕头（常量对象）来占位
+private static final Object PRESENT = new Object();
+
+// 当你调用 HashSet.add() 时，它自己不干活，直接扔给 HashMap
+public boolean add(E e) {
+    // 把你要存的元素 e 当作 HashMap 的 Key，统统塞入 PRESENT 作为 Value
+    // 利用 HashMap 的 Key 天生不可重复的特性，完美实现去重！
+    return map.put(e, PRESENT) == null;
+}
+```
+
+### 2. HashMap 的 Key 可以为 null 吗？
+* **结论：可以，但只能有一个。**
+* **底层处理（VIP 0号包厢源码）：** 因为 `null` 无法调用 `hashCode()` 方法，否则会报空指针（NPE）。所以 HashMap 底层做了极度特殊的拦截：
+```java
+// HashMap 底层计算 Hash 值的核心源码
+static final int hash(Object key) {
+    int h;
+    // 🚨 核心魔法：如果 key 是 null，连算都不算，直接强行返回 0！
+    // 这意味着 Key 为 null 的数据，永远固定存在 Node 数组的第 0 个桶里。
+    return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
+}
+```
+* **对比拓展：** `ConcurrentHashMap` 为了避免多线程环境下的“二义性”（无法分辨是 Key 不存在返回 null，还是 Value 本身就是 null），**严禁 Key 或 Value 为 null**。
+
+### 3. HashMap 能用自定义对象当 Key 吗？（天坑警告与实战代码）
+* **结论：可以，但绝对强制要求重写该对象的 `hashCode()` 和 `equals()` 方法。**
+* **灾难现场：** 如果不重写，Java 默认使用对象的**物理内存地址**计算 Hash。即使两个订单在业务上完全一样，只要是两次 `new` 出来的，HashMap 就会认为是两个完全不相干的 Key，导致存进去的数据永远取不出来，甚至引发 OOM 内存泄漏。
+
+**🔥 实战灾难演示（以你的“毛肉外卖”业务为例）：**
+```java
+import java.util.HashMap;
+import java.util.Objects;
+
+// 自定义对象作为 Key
+class Order {
+    int orderId;
+    String name;
+
+    public Order(int orderId, String name) {
+        this.orderId = orderId;
+        this.name = name;
+    }
+
+    // 🚨 致命缺陷：如果下面这段重写代码被注释掉，必定发生数据丢失！
+    // 正常开发规范：必须让 IDEA 自动生成 equals 和 hashCode
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Order order = (Order) o;
+        return orderId == order.orderId && Objects.equals(name, order.name);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(orderId, name);
+    }
+}
+
+public class HashMapPitfallDemo {
+    public static void main(String[] args) {
+        HashMap<Order, String> cache = new HashMap<>();
+
+        // 1. 存入订单 order1
+        Order order1 = new Order(1001, "毛肉外卖");
+        cache.put(order1, "加麻加辣");
+
+        // 2. 业务流转，前端又传来一个相同内容的订单 order2
+        Order order2 = new Order(1001, "毛肉外卖");
+
+        // 3. 尝试获取！
+        // 如果 Order 类没有重写那两个方法，这里拿到的 info 绝对是 null！
+        // 因为 order1 和 order2 的物理内存地址不同，被当成了两个 Key。
+        String info = cache.get(order2); 
+        System.out.println("获取到的订单备注：" + info); 
+    }
+}
+```
+
+***
+
+这 10 道题，简直是 MySQL 面试的**“大满贯题库”**！无论是中大厂的一面基础，还是二三面的架构深挖，全都被囊括在里面了。
+
+既然你已经适应了咱们**“大白话 + 底层逻辑 + 实战代码验证”**的超高强度节奏，那我就毫不客气了。咱们直接把这 10 个问题揉碎，整合成你《终极笔记》的最后一块重要拼图——**《MySQL 核心底层与架构实战篇》**。
+
+准备好你的剪贴板，一键复制接上：
+
+***
+
+## 十八、 MySQL 数据库：从底层 B+ 树到分库分表实战
+
+### 1. 索引的本质与 B+ 树底层揭秘 (Q1, Q2)
+* **大白话理解：** 索引就是一本字典的**目录**。没有目录，你找一个字得翻遍整本字典（全表扫描）；有了目录，几秒钟就能定位。
+* **为什么底层是 B+ 树？（面试必考对比）**
+    * **为什么不用 Hash？** Hash 虽然单条查询极快（O(1)），但它不支持范围查询（`WHERE age > 18`），因为 Hash 计算后的结果是散乱的。
+    * **为什么不用普通的 B 树？** B 树的每个节点都存着真实数据，导致一个节点存不了多少目录。而 **B+ 树**只在最底层的**叶子节点**存放真实数据，非叶子节点全放纯目录。这使得 B+ 树变得极其“矮胖”，通常 3 层就能存放千万级数据，意味着最多只要 3 次磁盘 I/O。
+    * **B+ 树的杀手锏：** 所有叶子节点之间，用**双向链表**连在了一起！这让范围查询变得极其丝滑，查到大于 18 岁的第一个人，顺着链表往后拿就行了。
+
+
+
+### 2. 聚簇索引 vs 非聚簇索引 (Q3)
+* **聚簇索引（主键索引 / 豪华别墅）：** 叶子节点里，包含了**这一行的完整数据**。找到了索引，就找到了全部数据。
+* **非聚簇索引（二级索引 / 门牌号指引）：** 比如给 `name` 字段建了索引。它的叶子节点里不存完整数据，只存了**该行的主键 ID**。找到 `name` 后，还得拿着主键 ID 回到聚簇索引那棵树里再查一次，这叫**回表**。
+* **🚨 极端情况：如果没有主键怎么办？**
+  InnoDB 引擎是强迫症，必须有一棵聚簇索引树！
+    1. 你定义了 Primary Key，它就是聚簇索引。
+    2. 如果没有 PK，它会找第一个**不包含 NULL 值的唯一索引（Unique Index）**作为聚簇索引。
+    3. 如果连唯一索引都没有，MySQL 会在底层**偷偷生成一个 6 字节的隐藏字段 `ROW_ID`** 作为聚簇索引。
+
+### 3. 索引失效的案发现场与排查 (Q5)
+* **怎么判断失效？** 永远用 **`EXPLAIN`** 关键字！重点看 `type` 字段（`ALL` 是全表扫描，`ref`/`range` 是走索引）。
+* **四大高频失效场景（附实战 SQL）：**
+    1. **左模糊匹配：** `LIKE '%张'`。目录里是按“张”开头的拼音排的，你一上来找结尾，目录当场废掉。（只能用 `LIKE '张%'`）。
+    2. **隐式类型转换：** `phone` 字段是 varchar 字符串，你查询时没加引号写成了 `WHERE phone = 13800138000`。MySQL 底层会偷偷给字段套个强转函数，导致索引失效。
+    3. **使用了 OR 且左右不全有索引：** `WHERE id = 1 OR age = 18`。如果 `age` 没建索引，为了找 age，依然得全表扫描。
+    4. **在索引列上做运算或套函数：**
+        ```sql
+        -- 🚨 灾难写法：在 create_time 索引列上套了 YEAR() 函数，索引直接报废！
+        EXPLAIN SELECT * FROM user WHERE YEAR(create_time) = 2026; 
+        
+        -- ✅ 满分优化写法：把运算放在等号右边！
+        EXPLAIN SELECT * FROM user WHERE create_time >= '2026-01-01' AND create_time < '2027-01-01';
+        ```
+
+### 4. 什么是函数索引？(Q4 - MySQL 8.0 新特性)
+* 如果你非得用 `WHERE YEAR(create_time) = 2026` 怎么办？在 MySQL 8.0 之前只能认栽全表扫描。
+* MySQL 8.0 引入了**函数索引**，你可以直接把函数计算的结果当成一个索引树存起来！
+  ```sql
+  -- 创建函数索引（注意双括号）
+  CREATE INDEX idx_year_create_time ON user ((YEAR(create_time)));
+  -- 此时再执行上面的灾难写法，就能完美命中该函数索引！
+  ```
+
+### 5. 事务隔离级别与锁机制 (Q6)
+* **四大隔离级别（针对并发事务的脏读、不可重复读、幻读）：**
+    1. 读未提交（Read Uncommitted）：毫无底线，能读到别人没提交的数据（脏读）。
+    2. 读已提交（RC，Read Committed）：Oracle 默认。每次查询生成新视图。
+    3. **可重复读（RR，Repeatable Read）：MySQL 默认。** 事务开启时拍一张快照，整个事务期间看到的数据一致。**底层基于 MVCC（多版本并发控制）实现**，无锁并发读取。
+    4. 串行化（Serializable）：全部加锁，性能极差。
+
+
+
+* **InnoDB 的行级锁（加锁实战）：**
+    * **记录锁 (Record Lock)：** 精准锁住某一行（`SELECT * FROM user WHERE id = 1 FOR UPDATE;`）。
+    * **间隙锁 (Gap Lock)：** 锁住两个索引记录之间的空隙，防止别的事务在这个空隙里插入新数据（**彻底解决 RR 级别下的幻读问题！**）。
+    * **临键锁 (Next-Key Lock)：** 记录锁 + 间隙锁的结合体，既锁行，又锁间隙。
+
+### 6. 慢查询实战与 SQL 优化 (Q8, Q9)
+* **排查链路：** 开启慢查询日志 -> 抓出耗时 SQL -> 加上 `EXPLAIN` 分析执行计划。
+* **实习/项目中的终极优化案例：深度分页打穿数据库**
+    * **案发现场：** 小程序后端需要查第 10 万页的订单 `SELECT * FROM orders ORDER BY id LIMIT 1000000, 10;`。MySQL 底层会傻乎乎地查出 1000010 条记录，然后扔掉前一百万条，极度耗时！
+    * **实战代码优化（子查询延迟关联）：** 先利用主键聚簇索引的极速特性查出 ID，再去连表查完整数据，完美避免百万次回表！
+        ```sql
+        -- 优化后的深度分页 SQL（大厂标准写法）
+        SELECT o.* FROM orders o 
+        INNER JOIN (
+            -- 内部子查询：因为只 SELECT id，直接触发“索引覆盖”，速度起飞！
+            SELECT id FROM orders ORDER BY id LIMIT 1000000, 10
+        ) AS temp ON o.id = temp.id;
+        ```
+
+### 7. 海量数据架构：分库分表 (Q10)
+当单表数据量突破 1000 万 ~ 2000 万（受限于 B+ 树的层高和内存），哪怕索引写得再好，增删改查也会变慢。
+* **垂直切分：** 把“用户表”劈开，基础信息（账密）留在一张表，扩展信息（爱好、住址）剥离到另一张表。或者把用户库和订单库拆成两个独立的数据库（微服务架构）。
+* **水平切分（重点）：** 表结构不变，把数据劈开。常用的分片算法有：
+    1. **哈希取模算法 (Hash)：** 比如有 4 张表，`用户 ID % 4`。优点是数据绝对均匀；缺点是以后想扩容成 8 张表时，老数据得全部迁移重算。
+    2. **范围切分算法 (Range)：** 按时间（2025年一张表，2026年一张表）或 ID 段（1~100万一张表）。优点是扩容极其简单；缺点是存在热点问题（比如大家都在疯狂写 2026 年的表，老表全闲着）。
+    * *(实战提示：企业中通常结合使用，或者引入 ShardingSphere 等中间件来处理。)*
+
+***
+
+
+
 ***
 
 
