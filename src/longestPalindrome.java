@@ -1,4 +1,4 @@
-public class lengthOfLongestSubstring {
+public class longestPalindrome{
 
     /*
      * Java String 常用方法速查：
@@ -65,30 +65,69 @@ public class lengthOfLongestSubstring {
      *     把数字字符串转成 int，例如 "123" -> 123。
      */
 
-    public int lengthOfLongestSubstring(String s) {
-        if (s.isEmpty()) return 0;
+    public String longestPalindrome(String s) {
 
-        int count = 0;
-        String subString = "";
+        if (s.isEmpty())return "";
 
-        for (int i = 0; i < s.length(); i++) {
+        String res = "";
+        int index = s.length()/2;
+        int left = 0;
+        int right = s.length()-1;
+
+        for (int i = 0; i < s.length(); i++){
             char c = s.charAt(i);
+            left = i - 1;
+            right = i + 1;
+            String leftSubString = "";
+            String rightSubString = "";
+            while (left >= 0 && right < s.length()){
+                char leftChar = s.charAt(left);
+                char rightChar = s.charAt(right);
+                if (leftChar==rightChar) {
+                    leftSubString = leftSubString + leftChar;
+                    rightSubString = rightSubString + rightChar;
+                }
+                else{break;}
+                left--;
+                right++;
 
-            int subIndex = subString.indexOf(c);
-            if (subIndex != -1) {
-                subString = subString.substring(subIndex + 1);
             }
+            //String temp = leftSubString + s.charAt(i) + rightSubString;
+            String temp = s.substring(left + 1, right);
+            if (temp.length() > res.length())res = temp;
 
-            subString = subString + c;
-            count = subString.length() > count ? subString.length() : count;
         }
+        for (int i = 0; i < s.length(); i++){
+            char c = s.charAt(i);
+            left = i;
+            right = i + 1;
+            String leftSubString = "";
+            String rightSubString = "";
+            while (left >= 0 && right < s.length()){
+                char leftChar = s.charAt(left);
+                char rightChar = s.charAt(right);
+                if (leftChar==rightChar) {
+                    leftSubString = leftSubString + leftChar;
+                    rightSubString = rightSubString + rightChar;
+                }
+                else{break;}
+                left--;
+                right++;
 
-        return count;
+            }
+            //String temp = leftSubString + s.charAt(i) + rightSubString;
+            String temp = s.substring(left + 1, right);
+            if (temp.length() > res.length())res = temp;
+
+        }
+        return res;
+
+
     }
 
 
     public static void main(String[] args) {
-        lengthOfLongestSubstring solution = new lengthOfLongestSubstring();
+        longestPalindrome solution = new longestPalindrome();
 
         String[] testCases = {
                 "",
@@ -100,7 +139,7 @@ public class lengthOfLongestSubstring {
         };
 
         for (String s : testCases) {
-            int result = solution.lengthOfLongestSubstring(s);
+            String result = solution.longestPalindrome(s);
             System.out.println("输入: \"" + s + "\" -> 最长无重复子串长度: " + result);
         }
     }

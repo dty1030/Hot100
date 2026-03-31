@@ -1,7 +1,8 @@
 import java.util.List;
 
-class Solution {
+class solveNQueens {
     public List<List<String>> solveNQueens(int n) {
+        return null;
 
     }
 }
