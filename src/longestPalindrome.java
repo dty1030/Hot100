@@ -143,4 +143,53 @@ public class longestPalindrome{
             System.out.println("输入: \"" + s + "\" -> 最长无重复子串长度: " + result);
         }
     }
+
+    public String longestPalindromeR(String s) {
+        //寻找中心
+        int index = s.length() + 1 / 2;
+        int left = 0;
+        int right = s.length()-1;
+        String substring = "";
+        String res = "";
+        for (int i = 0; i < s.length(); i++){
+                left = i - 1;
+                right = i + 1;
+                while (left >= 0 && right < s.length()){
+                    if (s.charAt(left) == s.charAt(right)){
+                        left--;
+                        right++;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                }
+                substring = s.substring(left + 1, right);
+                if (substring.length() > res.length())res = substring;
+
+
+        }
+        for (int i = 0; i < s.length(); i++){
+                left = i;
+                right = i + 1;
+                while (left >= 0 && right < s.length()){
+                    if (s.charAt(left) == s.charAt(right)){
+                        left--;
+                        right++;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
+                }
+                substring = s.substring(left + 1, right);
+                if (substring.length() > res.length())res = substring;
+
+            }
+
+        return res;
+
+    }
 }
