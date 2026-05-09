@@ -17,6 +17,7 @@ public class maxProfitIV {
                 notHold[j] = Math.max(notHold[j], hold[j-1] + prices[i]);
             }
         }
+        return 0;
 
     }
 }

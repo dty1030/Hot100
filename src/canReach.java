@@ -15,6 +15,7 @@ public class canReach {
             }
             else return false;
         }
+        return false;
 
     }
     void helper(int[] arr, boolean[] visited, int start){
